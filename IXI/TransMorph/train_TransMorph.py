@@ -1,3 +1,6 @@
+from pathlib import Path
+
+from torch.optim.lr_scheduler import StepLR
 from torch.utils.tensorboard import SummaryWriter
 import os, utils, glob, losses
 import sys
@@ -25,44 +28,59 @@ class Logger(object):
     def flush(self):
         pass
 
-def main():
-    batch_size = 1
-    atlas_dir = 'Path_to_IXI_data/atlas.pkl'
-    train_dir = 'Path_to_IXI_data/Train/'
-    val_dir = 'Path_to_IXI_data/Val/'
+def main(num_workers=0, batch_size=4, half_precision=True, use_scheduler=False):
+    if torch.cuda.is_available():
+        n_gpus = torch.cuda.device_count()
+        print('Number of GPUs: ' + str(n_gpus))
+        for GPU_idx in range(n_gpus):
+            GPU_name = torch.cuda.get_device_name(GPU_idx)
+            print('     GPU #' + str(GPU_idx) + ': ' + GPU_name)
+    running_on_dgx = os.path.isdir('/raid/')
+
+    device = torch.device('cuda:3' if torch.cuda.is_available() else 'cpu')
+    if running_on_dgx:
+        database_dir = Path('/raid/data/users/adarc/registration/IXI/IXI_data')
+    else:
+        database_dir = Path(r'D:\Datasets\IXI\ixi_from_transmorph\IXI_data')  #
+    atlas_dir = database_dir / 'atlas.pkl'
+    train_dir = database_dir / 'Train'
+    val_dir = database_dir / 'Val'
+    train_writer_step = 0
+    val_writer_step = 0
     weights = [1, 1] # loss weights
-    save_dir = 'TransMorph_ncc_{}_diffusion_{}/'.format(weights[0], weights[1])
-    if not os.path.exists('experiments/'+save_dir):
-        os.makedirs('experiments/'+save_dir)
-    if not os.path.exists('logs/'+save_dir):
-        os.makedirs('logs/'+save_dir)
-    sys.stdout = Logger('logs/'+save_dir)
-    lr = 0.0001 # learning rate
+    process_name = f'bs1_fixed_dataset_IXI_TransMorph_ncc_{weights[0]}_diffusion_{weights[1]}'
+    experiment_dir = f'output/experiments/{process_name}'
+    logs_dir = f'output/logs/{process_name}'
+
+    os.makedirs(experiment_dir, exist_ok=True)
+    os.makedirs(logs_dir, exist_ok=True)
+    sys.stdout = Logger(logs_dir)
+    lr = 0.0001  # learning rate
     epoch_start = 0
-    max_epoch = 500 #max traning epoch
-    cont_training = False #if continue training
+    max_epoch = 500  #max traning epoch
+    cont_training = False  #if continue training
 
     '''
     Initialize model
     '''
     config = CONFIGS_TM['TransMorph']
     model = TransMorph.TransMorph(config)
-    model.cuda()
+    model.to(device)
 
     '''
     Initialize spatial transformation function
     '''
-    reg_model = utils.register_model(config.img_size, 'nearest')
-    reg_model.cuda()
-    reg_model_bilin = utils.register_model(config.img_size, 'bilinear')
-    reg_model_bilin.cuda()
+    reg_model = utils.register_model(device, config.img_size, 'nearest')  # todo remove inputing device (no use anymore)
+    reg_model.to(device)
+    reg_model_bilin = utils.register_model(device, config.img_size, 'bilinear')
+    reg_model_bilin.to(device)
 
     '''
     If continue from previous training
     '''
     if cont_training:
-        epoch_start = 201
-        model_dir = 'experiments/'+save_dir
+        epoch_start = 394
+        model_dir = experiment_dir
         updated_lr = round(lr * np.power(1 - (epoch_start) / max_epoch,0.9),8)
         best_model = torch.load(model_dir + natsorted(os.listdir(model_dir))[-1])['state_dict']
         print('Model: {} loaded!'.format(natsorted(os.listdir(model_dir))[-1]))
@@ -73,83 +91,132 @@ def main():
     '''
     Initialize training
     '''
-    train_composed = transforms.Compose([trans.RandomFlip(0),
-                                         trans.NumpyType((np.float32, np.float32)),
-                                         ])
+    train_composed = transforms.Compose([
+        trans.RandomFlip(0),
+        trans.NumpyType((np.float32, np.float32, np.float32, np.float32))])
+    # rearrange segmentation label to 1 to 46
+    val_composed = transforms.Compose([
+        trans.Seg_norm(),
+        trans.NumpyType((np.float32, np.int16))])
 
-    val_composed = transforms.Compose([trans.Seg_norm(), #rearrange segmentation label to 1 to 46
-                                       trans.NumpyType((np.float32, np.int16))])
-    train_set = datasets.IXIBrainDataset(glob.glob(train_dir + '*.pkl'), atlas_dir, transforms=train_composed)
-    val_set = datasets.IXIBrainInferDataset(glob.glob(val_dir + '*.pkl'), atlas_dir, transforms=val_composed)
-    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
-    val_loader = DataLoader(val_set, batch_size=1, shuffle=False, num_workers=4, pin_memory=True, drop_last=True)
+    train_set = datasets.IXIBrainDataset(glob.glob((train_dir / '*.pkl').as_posix()), atlas_dir, transforms=train_composed)
+    val_set = datasets.IXIBrainInferDataset(glob.glob((val_dir / '*.pkl').as_posix()), atlas_dir, transforms=val_composed)
 
-    optimizer = optim.Adam(model.parameters(), lr=updated_lr, weight_decay=0, amsgrad=True)
-    criterion = losses.NCC_vxm()
-    criterions = [criterion]
-    criterions += [losses.Grad3d(penalty='l2')]
+    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
+    val_loader = DataLoader(val_set, batch_size=1, shuffle=False, num_workers=num_workers, pin_memory=True, drop_last=True)
+
+
+
+    if use_scheduler:
+        new_lr_based_scheduler = 0.0001
+        optimizer = optim.Adam(model.parameters(), lr=new_lr_based_scheduler, weight_decay=0, amsgrad=True)
+        scheduler = StepLR(optimizer, step_size=10, gamma=0.1)
+    else:
+        optimizer = optim.Adam(model.parameters(), lr=updated_lr, weight_decay=0, amsgrad=True)
+
+
+    if half_precision:
+        scaler = torch.cuda.amp.GradScaler()
+    criterions = [losses.NCC_vxm(device), losses.Grad3d(penalty='l2')]
     best_dsc = 0
-    writer = SummaryWriter(log_dir='logs/'+save_dir)
+    writer = SummaryWriter(log_dir=logs_dir)
     for epoch in range(epoch_start, max_epoch):
         print('Training Starts')
         '''
         Training
         '''
-        loss_all = utils.AverageMeter()
-        idx = 0
-        for data in train_loader:
-            idx += 1
-            model.train()
-            adjust_learning_rate(optimizer, epoch, max_epoch, lr)
-            data = [t.cuda() for t in data]
+        train_dsc_average_meter = utils.AverageMeter()
+        train_loss_average_meter = utils.AverageMeter()
+        model.train()
+        for train_batch_idx, data in enumerate(train_loader):
+            # if train_batch_idx > 2:
+            #     break
+            if not use_scheduler:
+                adjust_learning_rate(optimizer, epoch, max_epoch, lr)
+            data = [t.to(device) for t in data]
             x = data[0]
             y = data[1]
+            x_seg = data[2]
+            y_seg = data[3]
             x_in = torch.cat((x,y), dim=1)
-            output = model(x_in)
-            loss = 0
-            loss_vals = []
-            for n, loss_function in enumerate(criterions):
-                curr_loss = loss_function(output[n], y) * weights[n]
-                loss_vals.append(curr_loss)
-                loss += curr_loss
-            loss_all.update(loss.item(), y.numel())
+            with torch.cuda.amp.autocast():
+                output = model(x_in)
+                def_out = reg_model([x_seg.to(device).float(), output[1].to(device)])
+                dsc = utils.dice_val_VOI(def_out.long(), y_seg.long())
+                train_dsc_average_meter.update(dsc, x.size(0))
+                ncc_loss = criterions[0](output[0], y)
+                grad3d_loss = criterions[1](output[1], y)
+                loss = ncc_loss * weights[0] + grad3d_loss * weights[1]
+                train_loss_average_meter.update(loss.item(), y.numel())
             # compute gradient and do SGD step
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            if half_precision:
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
 
-            print('Iter {} of {} loss {:.4f}, Img Sim: {:.6f}, Reg: {:.6f}'.format(idx, len(train_loader), loss.item(), loss_vals[0].item(), loss_vals[1].item()))
+            writer.add_scalar('NCC/train', ncc_loss.item(), train_writer_step)
+            writer.add_scalar('Grad3d/train', grad3d_loss.item(), train_writer_step)
+            writer.add_scalar('Loss/train', loss.item(), train_writer_step)
+            writer.add_scalar('DSC/train', dsc, train_writer_step)
+            train_writer_step += 1
+            print(f"Epoch: {epoch}, Batch {train_batch_idx}/{len(train_loader)} Loss: {loss.item():.4f}, NCC: {ncc_loss.item() / 2:.6f}, Reg: {grad3d_loss.item() / 2:.6f}")
 
-        writer.add_scalar('Loss/train', loss_all.avg, epoch)
-        print('Epoch {} loss {:.4f}'.format(epoch, loss_all.avg))
+        writer.add_scalar('Loss_per_epoch/train', train_loss_average_meter.avg, epoch)
+        writer.add_scalar('DSC_per_epoch/train', train_dsc_average_meter.avg, epoch)
+        if use_scheduler:
+            scheduler.step()  # update learning rate
+
         '''
         Validation
         '''
-        eval_dsc = utils.AverageMeter()
-        with torch.no_grad():
-            for data in val_loader:
-                model.eval()
-                data = [t.cuda() for t in data]
-                x = data[0]
-                y = data[1]
-                x_seg = data[2]
-                y_seg = data[3]
-                x_in = torch.cat((x, y), dim=1)
-                grid_img = mk_grid_img(8, 1, config.img_size)
-                output = model(x_in)
-                def_out = reg_model([x_seg.cuda().float(), output[1].cuda()])
-                def_grid = reg_model_bilin([grid_img.float(), output[1].cuda()])
-                dsc = utils.dice_val_VOI(def_out.long(), y_seg.long())
-                eval_dsc.update(dsc.item(), x.size(0))
-                print(eval_dsc.avg)
-        best_dsc = max(eval_dsc.avg, best_dsc)
-        save_checkpoint({
-            'epoch': epoch + 1,
-            'state_dict': model.state_dict(),
-            'best_dsc': best_dsc,
-            'optimizer': optimizer.state_dict(),
-        }, save_dir='experiments/'+save_dir, filename='dsc{:.3f}.pth.tar'.format(eval_dsc.avg))
-        writer.add_scalar('DSC/validate', eval_dsc.avg, epoch)
+        val_loss_average_meter = utils.AverageMeter()
+        val_dsc_average_meter = utils.AverageMeter()
+
+
+        for val_batch_idx, data in enumerate(val_loader):
+            # if val_batch_idx > 2:
+            #     break
+            model.eval()
+            data = [t.to(device) for t in data]
+            x = data[0]
+            y = data[1]
+            x_seg = data[2]
+            y_seg = data[3]
+            x_in = torch.cat((x, y), dim=1)
+            grid_img = mk_grid_img(8, device, 1, config.img_size)
+            with torch.no_grad():
+                with torch.cuda.amp.autocast():
+                    output = model(x_in)
+                    ncc_loss = criterions[0](output[0], y)
+                    grad3d_loss = criterions[1](output[1], y)
+                    loss = ncc_loss * weights[0] + grad3d_loss * weights[1]
+                    val_loss_average_meter.update(loss.item(), y.numel())
+                    def_out = reg_model([x_seg.to(device).float(), output[1].to(device)])
+                    def_grid = reg_model_bilin([grid_img.to(device).float(), output[1].to(device)])
+                    dsc = utils.dice_val_VOI(def_out.long(), y_seg.long())
+                    val_dsc_average_meter.update(dsc.item(), x.size(0))
+            writer.add_scalar('ncc_loss/val', ncc_loss.item(), val_writer_step)
+            writer.add_scalar('Grad3d/val', grad3d_loss.item(), val_writer_step)
+            writer.add_scalar('Loss/val', loss.item(), val_writer_step)
+            writer.add_scalar('DSC/val', dsc, val_writer_step)
+            val_writer_step += 1
+        writer.add_scalar('DSC_per_epoch/val', dsc.item(), epoch)
+        writer.add_scalar('Loss_per_epoch/val', val_loss_average_meter.avg, epoch)
+
+        if val_dsc_average_meter.avg > best_dsc:
+            print(f"New best DSC: {val_dsc_average_meter.avg=} > {best_dsc=}\nSaving model...")
+            best_dsc = max(val_dsc_average_meter.avg, best_dsc)
+            save_checkpoint({
+                'epoch': epoch + 1,
+                'state_dict': model.state_dict(),
+                'best_dsc': best_dsc,
+                'optimizer': optimizer.state_dict(),
+            }, save_dir=experiment_dir, filename='best.pth.tar'.format(val_dsc_average_meter.avg))
+        writer.add_scalar('DSC_per_epoch/validate', val_dsc_average_meter.avg, epoch)
         plt.switch_backend('agg')
         pred_fig = comput_fig(def_out)
         grid_fig = comput_fig(def_grid)
@@ -163,7 +230,7 @@ def main():
         plt.close(tar_fig)
         writer.add_figure('prediction', pred_fig, epoch)
         plt.close(pred_fig)
-        loss_all.reset()
+        train_loss_average_meter.reset()
     writer.close()
 
 def comput_fig(img):
@@ -180,35 +247,18 @@ def adjust_learning_rate(optimizer, epoch, MAX_EPOCHES, INIT_LR, power=0.9):
     for param_group in optimizer.param_groups:
         param_group['lr'] = round(INIT_LR * np.power( 1 - (epoch) / MAX_EPOCHES ,power),8)
 
-def mk_grid_img(grid_step, line_thickness=1, grid_sz=(160, 192, 224)):
+def mk_grid_img(grid_step, device, line_thickness=1, grid_sz=(160, 192, 224)):
     grid_img = np.zeros(grid_sz)
     for j in range(0, grid_img.shape[1], grid_step):
         grid_img[:, j+line_thickness-1, :] = 1
     for i in range(0, grid_img.shape[2], grid_step):
         grid_img[:, :, i+line_thickness-1] = 1
     grid_img = grid_img[None, None, ...]
-    grid_img = torch.from_numpy(grid_img).cuda()
+    grid_img = torch.from_numpy(grid_img).to(device)
     return grid_img
 
 def save_checkpoint(state, save_dir='models', filename='checkpoint.pth.tar', max_model_num=8):
-    torch.save(state, save_dir+filename)
-    model_lists = natsorted(glob.glob(save_dir + '*'))
-    while len(model_lists) > max_model_num:
-        os.remove(model_lists[0])
-        model_lists = natsorted(glob.glob(save_dir + '*'))
+    torch.save(state, os.path.join(save_dir, filename))
 
 if __name__ == '__main__':
-    '''
-    GPU configuration
-    '''
-    GPU_iden = 1
-    GPU_num = torch.cuda.device_count()
-    print('Number of GPU: ' + str(GPU_num))
-    for GPU_idx in range(GPU_num):
-        GPU_name = torch.cuda.get_device_name(GPU_idx)
-        print('     GPU #' + str(GPU_idx) + ': ' + GPU_name)
-    torch.cuda.set_device(GPU_iden)
-    GPU_avai = torch.cuda.is_available()
-    print('Currently using: ' + torch.cuda.get_device_name(GPU_iden))
-    print('If the GPU is available? ' + str(GPU_avai))
     main()

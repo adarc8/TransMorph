@@ -272,9 +272,10 @@ class NCC_vxm(torch.nn.Module):
     Local (over window) normalized cross correlation loss.
     """
 
-    def __init__(self, win=None):
+    def __init__(self, device, win=None):
         super(NCC_vxm, self).__init__()
         self.win = win
+        self._device = device
 
     def forward(self, y_true, y_pred):
 
@@ -290,7 +291,7 @@ class NCC_vxm(torch.nn.Module):
         win = [9] * ndims if self.win is None else self.win
 
         # compute filters
-        sum_filt = torch.ones([1, 1, *win]).to("cuda")
+        sum_filt = torch.ones([1, 1, *win]).to(self._device)
 
         pad_no = math.floor(win[0] / 2)
 
@@ -326,7 +327,7 @@ class NCC_vxm(torch.nn.Module):
         I_var = I2_sum - 2 * u_I * I_sum + u_I * u_I * win_size
         J_var = J2_sum - 2 * u_J * J_sum + u_J * u_J * win_size
 
-        cc = cross * cross / (I_var * J_var + 1e-5)
+        cc = cross * cross / (I_var * J_var + 1e-4)
 
         return -torch.mean(cc)
 

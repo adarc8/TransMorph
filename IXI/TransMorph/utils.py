@@ -79,13 +79,14 @@ class SpatialTransformer(nn.Module):
         return F.grid_sample(src, new_locs, align_corners=True, mode=self.mode)
 
 class register_model(nn.Module):
-    def __init__(self, img_size=(64, 256, 256), mode='bilinear'):
+    def __init__(self, device, img_size=(64, 256, 256), mode='bilinear'):
         super(register_model, self).__init__()
         self.spatial_trans = SpatialTransformer(img_size, mode)
+        self.device = device
 
     def forward(self, x):
-        img = x[0].cuda()
-        flow = x[1].cuda()
+        img = x[0].to(self.device)
+        flow = x[1].to(self.device)
         out = self.spatial_trans(img, flow)
         return out
 

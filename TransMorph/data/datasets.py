@@ -8,7 +8,7 @@ import numpy as np
 
 
 class JHUBrainDataset(Dataset):
-    def __init__(self, data_path, transforms):
+    def __init__(self, data_path, transforms=None):
         self.paths = data_path
         self.transforms = transforms
 
@@ -18,9 +18,15 @@ class JHUBrainDataset(Dataset):
             out[i,...] = img == i
         return out
 
+    def get_random_path(self):
+        path = self.paths[np.random.randint(0, len(self.paths))]
+        return path
+
     def __getitem__(self, index):
         path = self.paths[index]
-        x, y = pkload(path)
+        x, x_seg = pkload(path)
+        y, y_seg = pkload(self.get_random_path())
+
         #print(x.shape)
         #print(x.shape)
         #print(np.unique(y))
@@ -28,7 +34,8 @@ class JHUBrainDataset(Dataset):
         # transforms work with nhwtc
         x, y = x[None, ...], y[None, ...]
         # print(x.shape, y.shape)#(1, 240, 240, 155) (1, 240, 240, 155)
-        x,y = self.transforms([x, y])
+        if self.transforms is not None:
+            x, y = self.transforms([x, y])
         #y = self.one_hot(y, 2)
         #print(y.shape)
         #sys.exit(0)
@@ -50,7 +57,7 @@ class JHUBrainDataset(Dataset):
 
 
 class JHUBrainInferDataset(Dataset):
-    def __init__(self, data_path, transforms):
+    def __init__(self, data_path, transforms=None):
         self.paths = data_path
         self.transforms = transforms
 
@@ -60,9 +67,14 @@ class JHUBrainInferDataset(Dataset):
             out[i,...] = img == i
         return out
 
+    def get_random_path(self):
+        path = self.paths[np.random.randint(0, len(self.paths))]
+        return path
+
     def __getitem__(self, index):
         path = self.paths[index]
-        x, y, x_seg, y_seg = pkload(path)
+        x, x_seg = pkload(path)
+        y, y_seg = pkload(self.get_random_path())
         #print(x.shape)
         #print(x.shape)
         #print(np.unique(y))
@@ -71,8 +83,9 @@ class JHUBrainInferDataset(Dataset):
         x, y = x[None, ...], y[None, ...]
         x_seg, y_seg= x_seg[None, ...], y_seg[None, ...]
         # print(x.shape, y.shape)#(1, 240, 240, 155) (1, 240, 240, 155)
-        x, x_seg = self.transforms([x, x_seg])
-        y, y_seg = self.transforms([y, y_seg])
+        if self.transforms is not None:
+            x, x_seg = self.transforms([x, x_seg])
+            y, y_seg = self.transforms([y, y_seg])
         #y = self.one_hot(y, 2)
         #print(y.shape)
         #sys.exit(0)
