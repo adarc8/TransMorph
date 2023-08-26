@@ -217,6 +217,8 @@ if __name__ == '__main__':
     '''
     GPU configuration
     '''
+    #define cuda:3 as the only available GPU
+    os.environ["CUDA_VISIBLE_DEVICES"] = "3"
     GPU_iden = 1
     GPU_num = torch.cuda.device_count()
     print('Number of GPU: ' + str(GPU_num))
