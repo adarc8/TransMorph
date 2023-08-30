@@ -27,10 +27,10 @@ class Logger(object):
 
 def main():
     batch_size = 1
-    train_dir = 'D:/DATA/JHUBrain/Train/'
-    val_dir = 'D:/DATA/JHUBrain/Val/'
+    train_dir = '/raid/data/users/adarc/registration/IXI/IXI_data/Train/'
+    val_dir = '/raid/data/users/adarc/registration/IXI/IXI_data/Val/'
     weights = [1, 0.02] # loss weights
-    save_dir = 'TransMorph_mse_{}_diffusion_{}/'.format(weights[0], weights[1])
+    save_dir = 'bs1_onlydataset_change_TransMorph_mse_{}_diffusion_{}/'.format(weights[0], weights[1])
     if not os.path.exists('experiments/'+save_dir):
         os.makedirs('experiments/'+save_dir)
     if not os.path.exists('logs/'+save_dir):
@@ -72,6 +72,8 @@ def main():
     '''
     Initialize training
     '''
+    train_batch_writer_step = 0
+    val_batch_writer_step = 0
     train_composed = transforms.Compose([trans.RandomFlip(0),
                                          trans.NumpyType((np.float32, np.float32)),
                                          ])
@@ -97,7 +99,9 @@ def main():
         '''
         loss_all = utils.AverageMeter()
         idx = 0
-        for data in train_loader:
+        for train_batch_idx, data in enumerate(train_loader):
+            # if train_batch_idx>2:
+            #     break
             idx += 1
             model.train()
             adjust_learning_rate(optimizer, epoch, max_epoch, lr)
@@ -117,6 +121,9 @@ def main():
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+
+            writer.add_scalar('Loss/train_batch', loss.item(), train_batch_writer_step)
+            train_batch_writer_step+=1
 
             del x_in
             del output
@@ -143,7 +150,9 @@ def main():
         '''
         eval_dsc = utils.AverageMeter()
         with torch.no_grad():
-            for data in val_loader:
+            for val_batch_idx, data in enumerate(val_loader):
+                # if val_batch_idx > 2:
+                #     break
                 model.eval()
                 data = [t.cuda() for t in data]
                 x = data[0]
@@ -156,6 +165,9 @@ def main():
                 def_out = reg_model([x_seg.cuda().float(), output[1].cuda()])
                 def_grid = reg_model_bilin([grid_img.float(), output[1].cuda()])
                 dsc = utils.dice_val(def_out.long(), y_seg.long(), 46)
+                writer.add_scalar('DSC/val_batch', dsc.item(), val_batch_writer_step)
+                val_batch_writer_step += 1
+                val_batch_idx
                 eval_dsc.update(dsc.item(), x.size(0))
                 print(eval_dsc.avg)
         best_dsc = max(eval_dsc.avg, best_dsc)
@@ -225,8 +237,8 @@ if __name__ == '__main__':
     for GPU_idx in range(GPU_num):
         GPU_name = torch.cuda.get_device_name(GPU_idx)
         print('     GPU #' + str(GPU_idx) + ': ' + GPU_name)
-    torch.cuda.set_device(GPU_iden)
+    # torch.cuda.set_device(GPU_iden)
     GPU_avai = torch.cuda.is_available()
-    print('Currently using: ' + torch.cuda.get_device_name(GPU_iden))
+    # print('Currently using: ' + torch.cuda.get_device_name(GPU_iden))
     print('If the GPU is available? ' + str(GPU_avai))
     main()
