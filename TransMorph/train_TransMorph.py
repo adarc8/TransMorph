@@ -26,11 +26,13 @@ class Logger(object):
         pass
 
 def main():
-    batch_size = 1
+    batch_size = 2
+    num_workers = 2
+    atlas_path = '/raid/data/users/adarc/registration/IXI/IXI_data/atlas.pkl'
     train_dir = '/raid/data/users/adarc/registration/IXI/IXI_data/Train/'
     val_dir = '/raid/data/users/adarc/registration/IXI/IXI_data/Val/'
     weights = [1, 0.02] # loss weights
-    save_dir = 'bs1_onlydataset_change_TransMorph_mse_{}_diffusion_{}/'.format(weights[0], weights[1])
+    save_dir = 'atlas2patient_pretrained_TransMorph_mse_{}_diffusion_{}/'.format(weights[0], weights[1])
     if not os.path.exists('experiments/'+save_dir):
         os.makedirs('experiments/'+save_dir)
     if not os.path.exists('logs/'+save_dir):
@@ -39,7 +41,7 @@ def main():
     lr = 0.0001 # learning rate
     epoch_start = 0
     max_epoch = 500 #max traning epoch
-    cont_training = False #if continue training
+    pretrained_model_path = '/raid/data/users/adarc/registration/forked-remote/experiments/bs1_onlydataset_change_TransMorph_mse_1_diffusion_0.02/dsc0.694.pth.tar'
 
     '''
     Initialize model
@@ -59,12 +61,11 @@ def main():
     '''
     If continue from previous training
     '''
-    if cont_training:
+    if pretrained_model_path is not None:
         epoch_start = 394
-        model_dir = 'experiments/'+save_dir
         updated_lr = round(lr * np.power(1 - (epoch_start) / max_epoch,0.9),8)
-        best_model = torch.load(model_dir + natsorted(os.listdir(model_dir))[-2])['state_dict']
-        print('Model: {} loaded!'.format(natsorted(os.listdir(model_dir))[-2]))
+        best_model = torch.load(pretrained_model_path)['state_dict']
+        print(f'Loading Pretrained from: {pretrained_model_path}')
         model.load_state_dict(best_model)
     else:
         updated_lr = lr
@@ -75,16 +76,16 @@ def main():
     train_batch_writer_step = 0
     val_batch_writer_step = 0
     train_composed = transforms.Compose([trans.RandomFlip(0),
-                                         trans.NumpyType((np.float32, np.float32)),
+                                         trans.NumpyType((np.float32, np.float32, np.int16, np.int16)),
                                          ])
 
     val_composed = transforms.Compose([trans.Seg_norm(), #rearrange segmentation label to 1 to 46
                                        trans.NumpyType((np.float32, np.int16)),
                                         ])
-    train_set = datasets.JHUBrainDataset(glob.glob(train_dir + '*.pkl'), transforms=train_composed)
-    val_set = datasets.JHUBrainInferDataset(glob.glob(val_dir + '*.pkl'), transforms=val_composed)
-    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
-    val_loader = DataLoader(val_set, batch_size=1, shuffle=False, num_workers=4, pin_memory=True, drop_last=True)
+    train_set = datasets.JHUBrainDataset(glob.glob(train_dir + '*.pkl'), transforms=train_composed, atlas_path=atlas_path)
+    val_set = datasets.JHUBrainDataset(glob.glob(val_dir + '*.pkl'), transforms=val_composed, atlas_path=atlas_path)
+    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
+    val_loader = DataLoader(val_set, batch_size=1, shuffle=False, num_workers=num_workers, pin_memory=True, drop_last=True)
 
     optimizer = optim.Adam(model.parameters(), lr=updated_lr, weight_decay=0, amsgrad=True)
     criterion = nn.MSELoss()
@@ -98,18 +99,18 @@ def main():
         Training
         '''
         loss_all = utils.AverageMeter()
-        idx = 0
+        model.train()
         for train_batch_idx, data in enumerate(train_loader):
             # if train_batch_idx>2:
             #     break
-            idx += 1
-            model.train()
             adjust_learning_rate(optimizer, epoch, max_epoch, lr)
+
             data = [t.cuda() for t in data]
-            x = data[0]
-            y = data[1]
+            x, y, x_seg, y_seg = data
             x_in = torch.cat((x,y), dim=1)
+
             output = model(x_in)
+
             loss = 0
             loss_vals = []
             for n, loss_function in enumerate(criterions):
@@ -123,6 +124,10 @@ def main():
             optimizer.step()
 
             writer.add_scalar('Loss/train_batch', loss.item(), train_batch_writer_step)
+            with torch.no_grad():
+                def_out = reg_model([x_seg.cuda().float(), output[1].cuda()])
+                dsc = utils.dice_val(def_out.long(), y_seg.long(), 46)
+            writer.add_scalar('DSC/train_batch', dsc.item(), train_batch_writer_step)
             train_batch_writer_step+=1
 
             del x_in
@@ -141,7 +146,7 @@ def main():
             loss.backward()
             optimizer.step()
 
-            print('Iter {} of {} loss {:.4f}, Img Sim: {:.6f}, Reg: {:.6f}'.format(idx, len(train_loader), loss.item(), loss_vals[0].item()/2, loss_vals[1].item()/2))
+            print('Iter {} of {} loss {:.4f}, Img Sim: {:.6f}, Reg: {:.6f}'.format(train_batch_idx, len(train_loader), loss.item(), loss_vals[0].item()/2, loss_vals[1].item()/2))
 
         writer.add_scalar('Loss/train', loss_all.avg, epoch)
         print('Epoch {} loss {:.4f}'.format(epoch, loss_all.avg))
@@ -155,16 +160,18 @@ def main():
                 #     break
                 model.eval()
                 data = [t.cuda() for t in data]
-                x = data[0]
-                y = data[1]
-                x_seg = data[2]
-                y_seg = data[3]
+                x, y, x_seg, y_seg = data
                 x_in = torch.cat((x, y), dim=1)
                 grid_img = mk_grid_img(8, 1, config.img_size)
                 output = model(x_in)
+                loss = 0
+                for n, loss_function in enumerate(criterions):
+                    curr_loss = loss_function(output[n], y) * weights[n]
+                    loss += curr_loss
                 def_out = reg_model([x_seg.cuda().float(), output[1].cuda()])
                 def_grid = reg_model_bilin([grid_img.float(), output[1].cuda()])
                 dsc = utils.dice_val(def_out.long(), y_seg.long(), 46)
+                writer.add_scalar('Loss/val_batch', loss.item(), val_batch_writer_step)
                 writer.add_scalar('DSC/val_batch', dsc.item(), val_batch_writer_step)
                 val_batch_writer_step += 1
                 val_batch_idx
@@ -193,6 +200,7 @@ def main():
         plt.close(pred_fig)
         loss_all.reset()
     writer.close()
+
 
 def comput_fig(img):
     img = img.detach().cpu().numpy()[0, 0, 48:64, :, :]
