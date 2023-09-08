@@ -28,20 +28,19 @@ class JHUBrainDataset(Dataset):
             y, y_seg = pkload(self._get_random_path())
 
         x, x_seg, y, y_seg = self._add_batch_dimension(x, x_seg, y, y_seg)
-
-        x, y, x_seg, y_seg = self.transforms([x, y, x_seg, y_seg])
-        # [Bsize,channelsHeight,,Width,Depth]
+        x, x_seg, y, y_seg = self.transforms([x, x_seg, y, y_seg])
         x, x_seg, y, y_seg = self._np_to_torch(x, x_seg, y, y_seg)
-        return x, y, x_seg, y_seg
+        return x, x_seg, y, y_seg
 
     def _get_random_path(self):
         path = self.paths[np.random.randint(0, len(self.paths))]
         return path
 
     def _np_to_torch(self, x, x_seg, y, y_seg):
-        x, y, x_seg, y_seg = np.ascontiguousarray(x), np.ascontiguousarray(y), \
-            np.ascontiguousarray(x_seg), np.ascontiguousarray(y_seg)
-        x, y, x_seg, y_seg = torch.from_numpy(x), torch.from_numpy(y), torch.from_numpy(x_seg), torch.from_numpy(y_seg)
+        # [Bsize,channelsHeight,,Width,Depth]
+        x, x_seg, y, y_seg = np.ascontiguousarray(x), np.ascontiguousarray(x_seg), \
+            np.ascontiguousarray(y), np.ascontiguousarray(y_seg)
+        x, x_seg, y, y_seg = torch.from_numpy(x), torch.from_numpy(x_seg), torch.from_numpy(y), torch.from_numpy(y_seg)
         return x, x_seg, y, y_seg
 
     def _add_batch_dimension(self, x, x_seg, y, y_seg):

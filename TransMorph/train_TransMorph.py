@@ -26,13 +26,13 @@ class Logger(object):
         pass
 
 def main():
-    batch_size = 2
+    batch_size = 1
     num_workers = 2
-    atlas_path = '/raid/data/users/adarc/registration/IXI/IXI_data/atlas.pkl'
+    atlas_path = '/raid/data/users/adarc/registration/IXI/IXI_data/new_atlas_subject_6_from_test.pkl'
     train_dir = '/raid/data/users/adarc/registration/IXI/IXI_data/Train/'
     val_dir = '/raid/data/users/adarc/registration/IXI/IXI_data/Val/'
     weights = [1, 0.02] # loss weights
-    save_dir = 'atlas2patient_pretrained_TransMorph_mse_{}_diffusion_{}/'.format(weights[0], weights[1])
+    save_dir = 'newrun_new_atlas_atlas2patient_pretrained_TransMorph_mse_{}_diffusion_{}/'.format(weights[0], weights[1])
     if not os.path.exists('experiments/'+save_dir):
         os.makedirs('experiments/'+save_dir)
     if not os.path.exists('logs/'+save_dir):
@@ -75,13 +75,15 @@ def main():
     '''
     train_batch_writer_step = 0
     val_batch_writer_step = 0
-    train_composed = transforms.Compose([trans.RandomFlip(0),
-                                         trans.NumpyType((np.float32, np.float32, np.int16, np.int16)),
-                                         ])
-
-    val_composed = transforms.Compose([trans.Seg_norm(), #rearrange segmentation label to 1 to 46
-                                       trans.NumpyType((np.float32, np.int16)),
-                                        ])
+    train_composed = transforms.Compose([
+        trans.Seg_norm(),  # rearrange segmentation label to 1 to 46
+        trans.RandomFlip(0),  # flip along x axis
+        trans.NumpyType((np.float32, np.int16, np.float32, np.int16)),  # convert to float32
+    ])
+    val_composed = transforms.Compose([
+        trans.Seg_norm(),  # rearrange segmentation label to 1 to 46
+        trans.NumpyType((np.float32, np.int16, np.float32, np.int16)),
+    ])
     train_set = datasets.JHUBrainDataset(glob.glob(train_dir + '*.pkl'), transforms=train_composed, atlas_path=atlas_path)
     val_set = datasets.JHUBrainDataset(glob.glob(val_dir + '*.pkl'), transforms=val_composed, atlas_path=atlas_path)
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
@@ -106,7 +108,7 @@ def main():
             adjust_learning_rate(optimizer, epoch, max_epoch, lr)
 
             data = [t.cuda() for t in data]
-            x, y, x_seg, y_seg = data
+            x, x_seg, y, y_seg = data
             x_in = torch.cat((x,y), dim=1)
 
             output = model(x_in)
@@ -154,13 +156,13 @@ def main():
         Validation
         '''
         eval_dsc = utils.AverageMeter()
+        model.eval()
         with torch.no_grad():
             for val_batch_idx, data in enumerate(val_loader):
                 # if val_batch_idx > 2:
                 #     break
-                model.eval()
                 data = [t.cuda() for t in data]
-                x, y, x_seg, y_seg = data
+                x, x_seg, y, y_seg = data
                 x_in = torch.cat((x, y), dim=1)
                 grid_img = mk_grid_img(8, 1, config.img_size)
                 output = model(x_in)
@@ -174,7 +176,6 @@ def main():
                 writer.add_scalar('Loss/val_batch', loss.item(), val_batch_writer_step)
                 writer.add_scalar('DSC/val_batch', dsc.item(), val_batch_writer_step)
                 val_batch_writer_step += 1
-                val_batch_idx
                 eval_dsc.update(dsc.item(), x.size(0))
                 print(eval_dsc.avg)
         best_dsc = max(eval_dsc.avg, best_dsc)
