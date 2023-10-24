@@ -27,7 +27,7 @@ class Base(object):
             # print(dim,shape) # 3, (240,240,155)
             self.sample(*shape)
 
-        if isinstance(img, collections.Sequence):
+        if isinstance(img, collections.abc.Sequence):
             return [self.tf(x, k) for k, x in enumerate(img)] # img:k=0,label:k=1
 
         return self.tf(img)
@@ -303,7 +303,8 @@ class Seg_norm(Base):
                           28, 30, 31, 41, 42, 43, 44, 46, 47, 49, 50, 51, 52, 53, 54, 58, 60, 62,
                           63, 72, 77, 80, 85, 251, 252, 253, 254, 255])
     def tf(self, img, k=0):
-        if k == 0:
+        # img = [x, x_seg, y, y_seg], we want to normalize x_seg and y_seg (so taking k=1, k=3)
+        if k % 2 == 0:
             return img
         img_out = np.zeros_like(img)
         for i in range(len(self.seg_table)):
