@@ -21,9 +21,11 @@ class JHUBrainDataset(Dataset):
     def __getitem__(self, index):
         path = self.paths[index]
         if self._atlas_path is not None:
+            # Brain2Atlas
             x, x_seg = pkload(self._atlas_path)
             y, y_seg = pkload(path)
         else:
+            # Brain2Brain
             x, x_seg = pkload(path)
             y, y_seg = pkload(self._get_random_path())
 

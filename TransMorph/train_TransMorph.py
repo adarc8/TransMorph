@@ -58,9 +58,7 @@ def main():
     reg_model_bilin = utils.register_model(config.img_size, 'bilinear')
     reg_model_bilin.cuda()
 
-    '''
-    If continue from previous training
-    '''
+    # If continue from previous training
     if pretrained_model_path is not None:
         epoch_start = 394
         updated_lr = round(lr * np.power(1 - (epoch_start) / max_epoch,0.9),8)
