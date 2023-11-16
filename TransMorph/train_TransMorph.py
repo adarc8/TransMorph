@@ -2,6 +2,8 @@ from torch.utils.tensorboard import SummaryWriter
 import os, utils, glob, losses
 import sys
 from torch.utils.data import DataLoader
+
+from deep_hist_repo.MI_from_other_repo import MutualInformationFromOtherRepo
 from data import datasets, trans
 import numpy as np
 import torch
@@ -26,22 +28,34 @@ class Logger(object):
         pass
 
 def main():
+    cuda_idx = "1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = cuda_idx  # Choose GPU
     batch_size = 1
-    num_workers = 2
-    atlas_path = '/raid/data/users/adarc/registration/IXI/IXI_data/new_atlas_subject_6_from_test.pkl'
+    num_workers = 4
+    atlas_path = None  # when its none, we are training brain2brain (and not brain2atlas)
+    # atlas_path = '/raid/data/users/adarc/registration/IXI/IXI_data/new_atlas_subject_6_from_test.pkl'
     train_dir = '/raid/data/users/adarc/registration/IXI/IXI_data/Train/'
     val_dir = '/raid/data/users/adarc/registration/IXI/IXI_data/Val/'
     weights = [1, 0.02] # loss weights
-    save_dir = 'newrun_new_atlas_atlas2patient_pretrained_TransMorph_mse_{}_diffusion_{}/'.format(weights[0], weights[1])
-    if not os.path.exists('experiments/'+save_dir):
-        os.makedirs('experiments/'+save_dir)
-    if not os.path.exists('logs/'+save_dir):
-        os.makedirs('logs/'+save_dir)
-    sys.stdout = Logger('logs/'+save_dir)
+    mi_loss = lambda x, y: losses.diff_mutual_information(x, y)
+    mi_from_other_repo = MutualInformationFromOtherRepo(num_bins=256, sigma=0.1, normalize=True).cuda()
+    mi_loss = lambda x, y: 1 - mi_from_other_repo(x, y)
+    L2_loss = nn.MSELoss()
+    grad3d_loss = losses.Grad3d(penalty='l2')
+    criterions = [mi_loss, grad3d_loss]
+    penalty_lambda = 3
+    process_name = f'MI_from_other_repo_3_penalty_atlas2atlas_IXI_cuda{cuda_idx}'
+    if not os.path.exists('experiments/'+process_name):
+        os.makedirs('experiments/'+process_name)
+    if not os.path.exists('logs/'+process_name):
+        os.makedirs('logs/'+process_name)
+    sys.stdout = Logger('logs/'+process_name)
     lr = 0.0001 # learning rate
+
     epoch_start = 0
     max_epoch = 500 #max traning epoch
-    pretrained_model_path = '/raid/data/users/adarc/registration/forked-remote/experiments/bs1_onlydataset_change_TransMorph_mse_1_diffusion_0.02/dsc0.694.pth.tar'
+    # pretrained_model_path = '/raid/data/users/adarc/registration/forked-remote/experiments/bs1_onlydataset_change_TransMorph_mse_1_diffusion_0.02/dsc0.694.pth.tar'
+    pretrained_model_path = None
 
     '''
     Initialize model
@@ -88,13 +102,12 @@ def main():
     val_loader = DataLoader(val_set, batch_size=1, shuffle=False, num_workers=num_workers, pin_memory=True, drop_last=True)
 
     optimizer = optim.Adam(model.parameters(), lr=updated_lr, weight_decay=0, amsgrad=True)
-    criterion = nn.MSELoss()
-    criterions = [criterion]
-    criterions += [losses.Grad3d(penalty='l2')]
+
+
     best_dsc = 0
-    writer = SummaryWriter(log_dir='logs/'+save_dir)
+    writer = SummaryWriter(log_dir='logs/'+process_name)
     for epoch in range(epoch_start, max_epoch):
-        print('Training Starts')
+        print(f'starting epoch {epoch}')
         '''
         Training
         '''
@@ -107,23 +120,36 @@ def main():
 
             data = [t.cuda() for t in data]
             x, x_seg, y, y_seg = data
+            # y_t2 = _get_t2_approx(x, y)
+
+            # x_in = torch.cat((x, y_t2), dim=1)
             x_in = torch.cat((x,y), dim=1)
 
             output = model(x_in)
+            # ~~~~ Old loss ~~~~
+            # loss = 0
+            # loss_vals = []
+            # for n, loss_function in enumerate(criterions):
+            #     curr_loss = loss_function(output[n], y) * weights[n]
+            #     loss_vals.append(curr_loss)
+            #     loss += curr_loss
+            # loss_all.update(loss.item(), y.numel())
+            with torch.no_grad():
+                input_mi = mi_loss(x, y)
+                output_l2 = L2_loss(output[0], y)  # l2 compare to original t1
+            output_mi = mi_loss(output[0], y)
+            loss = output_mi + penalty_lambda * grad3d_loss(output[1], y)   # isntead of 0.02
 
-            loss = 0
-            loss_vals = []
-            for n, loss_function in enumerate(criterions):
-                curr_loss = loss_function(output[n], y) * weights[n]
-                loss_vals.append(curr_loss)
-                loss += curr_loss
-            loss_all.update(loss.item(), y.numel())
             # compute gradient and do SGD step
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
             writer.add_scalar('Loss/train_batch', loss.item(), train_batch_writer_step)
+            writer.add_scalar('Loss/train_batch_input_mi', input_mi.item(), train_batch_writer_step)
+            writer.add_scalar('Loss/train_batch_output_mi', output_mi.item(), train_batch_writer_step)
+            writer.add_scalar('Loss/train_batch_output_l2', output_l2.item(), train_batch_writer_step)
+
             with torch.no_grad():
                 def_out = reg_model([x_seg.cuda().float(), output[1].cuda()])
                 dsc = utils.dice_val(def_out.long(), y_seg.long(), 46)
@@ -132,21 +158,34 @@ def main():
 
             del x_in
             del output
+            del loss
             # flip fixed and moving images
-            loss = 0
+            # x_t2 = _get_t2_approx(y, x)
+            # x_in = torch.cat((y, x_t2), dim=1)
             x_in = torch.cat((y, x), dim=1)
             output = model(x_in)
-            for n, loss_function in enumerate(criterions):
-                curr_loss = loss_function(output[n], x) * weights[n]
-                loss_vals[n] += curr_loss
-                loss += curr_loss
-            loss_all.update(loss.item(), y.numel())
+            # ~~~~ Old loss ~~~~
+            # loss = 0
+            # for n, loss_function in enumerate(criterions):
+            #     curr_loss = loss_function(output[n], x) * weights[n]
+            #     loss_vals[n] += curr_loss
+            #     loss += curr_loss
+            # loss_all.update(loss.item(), y.numel())
+
+            # loss = L2_loss(output[0], x)
+            # loss = L2_loss(output[0], x_t2) + penalty_lambda * grad3d_loss(output[1], x_t2)  # isntead of 0.02
+
+            output_mi = mi_loss(output[0], x)
+            loss = output_mi + penalty_lambda * grad3d_loss(output[1], x)  # isntead of 0.02
+
+
+
             # compute gradient and do SGD step
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            print('Iter {} of {} loss {:.4f}, Img Sim: {:.6f}, Reg: {:.6f}'.format(train_batch_idx, len(train_loader), loss.item(), loss_vals[0].item()/2, loss_vals[1].item()/2))
+            print(f'Epoch {epoch}, Iter {train_batch_idx}/{len(train_loader)}: Loss: {loss.item():.3f}, DSC: {dsc.item():.3f}')
 
         writer.add_scalar('Loss/train', loss_all.avg, epoch)
         print('Epoch {} loss {:.4f}'.format(epoch, loss_all.avg))
@@ -161,6 +200,8 @@ def main():
                 #     break
                 data = [t.cuda() for t in data]
                 x, x_seg, y, y_seg = data
+                # y_t2 = _get_t2_approx(x, y)
+                # x_in = torch.cat((x, y_t2), dim=1)
                 x_in = torch.cat((x, y), dim=1)
                 grid_img = mk_grid_img(8, 1, config.img_size)
                 output = model(x_in)
@@ -176,13 +217,14 @@ def main():
                 val_batch_writer_step += 1
                 eval_dsc.update(dsc.item(), x.size(0))
                 print(eval_dsc.avg)
-        best_dsc = max(eval_dsc.avg, best_dsc)
-        save_checkpoint({
-            'epoch': epoch + 1,
-            'state_dict': model.state_dict(),
-            'best_dsc': best_dsc,
-            'optimizer': optimizer.state_dict(),
-        }, save_dir='experiments/'+save_dir, filename='dsc{:.3f}.pth.tar'.format(eval_dsc.avg))
+        if eval_dsc.avg > best_dsc:
+            best_dsc = eval_dsc.avg
+            save_checkpoint({
+                'epoch': epoch + 1,
+                'state_dict': model.state_dict(),
+                'best_dsc': best_dsc,
+                'optimizer': optimizer.state_dict(),
+            }, save_dir=f'experiments/{process_name}', filename='best_dsc_checkpoint')
         writer.add_scalar('DSC/validate', eval_dsc.avg, epoch)
         plt.switch_backend('agg')
         pred_fig = comput_fig(def_out)
@@ -199,6 +241,17 @@ def main():
         plt.close(pred_fig)
         loss_all.reset()
     writer.close()
+
+
+def _get_t2_approx(x, y):
+    y_t2 = 1 - y  # scans histogram is mostly in [0,0.6], so t2 is in [0.4, 1]
+    # so we shift it by this "0.4" which we calc by the 3% percentile
+    perc3 = torch.kthvalue(y_t2[y_t2 > 0], int(y_t2[y_t2 > 0].numel() * 0.03)).values
+    y_t2 -= perc3
+    y_t2[y_t2 < 0] = 0
+    background_mask = x > 0.05
+    y_t2 = y_t2 * background_mask
+    return y_t2
 
 
 def comput_fig(img):
@@ -226,26 +279,7 @@ def mk_grid_img(grid_step, line_thickness=1, grid_sz=(160, 192, 224)):
     return grid_img
 
 def save_checkpoint(state, save_dir='models', filename='checkpoint.pth.tar', max_model_num=8):
-    torch.save(state, save_dir+filename)
-    model_lists = natsorted(glob.glob(save_dir + '*'))
-    while len(model_lists) > max_model_num:
-        os.remove(model_lists[0])
-        model_lists = natsorted(glob.glob(save_dir + '*'))
+    torch.save(state, os.path.join(save_dir, filename))
 
 if __name__ == '__main__':
-    '''
-    GPU configuration
-    '''
-    #define cuda:3 as the only available GPU
-    os.environ["CUDA_VISIBLE_DEVICES"] = "3"
-    GPU_iden = 1
-    GPU_num = torch.cuda.device_count()
-    print('Number of GPU: ' + str(GPU_num))
-    for GPU_idx in range(GPU_num):
-        GPU_name = torch.cuda.get_device_name(GPU_idx)
-        print('     GPU #' + str(GPU_idx) + ': ' + GPU_name)
-    # torch.cuda.set_device(GPU_iden)
-    GPU_avai = torch.cuda.is_available()
-    # print('Currently using: ' + torch.cuda.get_device_name(GPU_iden))
-    print('If the GPU is available? ' + str(GPU_avai))
     main()

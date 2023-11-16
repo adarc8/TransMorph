@@ -28,10 +28,14 @@ class JHUBrainDataset(Dataset):
             # Brain2Brain
             x, x_seg = pkload(path)
             y, y_seg = pkload(self._get_random_path())
+        # norm in [0,1]
+        x = (x - x.min()) / (x.max() - x.min())
+        y = (y - y.min()) / (y.max() - y.min())
 
         x, x_seg, y, y_seg = self._add_batch_dimension(x, x_seg, y, y_seg)
         x, x_seg, y, y_seg = self.transforms([x, x_seg, y, y_seg])
         x, x_seg, y, y_seg = self._np_to_torch(x, x_seg, y, y_seg)
+
         return x, x_seg, y, y_seg
 
     def _get_random_path(self):

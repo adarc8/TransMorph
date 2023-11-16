@@ -6,6 +6,10 @@ from math import exp
 import math
 import torch.nn as nn
 
+from deep_hist_repo.hist_layers import JointHistLayer, SingleDimHistLayer
+from deep_hist_repo.metrics import MutualInformationLoss
+
+
 def gaussian(window_size, sigma):
     gauss = torch.Tensor([exp(-(x - window_size // 2) ** 2 / float(2 * sigma ** 2)) for x in range(window_size)])
     return gauss / gauss.sum()
@@ -359,11 +363,12 @@ class MutualInformation(torch.nn.Module):
         self.vol_bin_centers = vol_bin_centers
 
     def mi(self, y_true, y_pred):
+
         y_pred = torch.clamp(y_pred, 0., self.max_clip)
         y_true = torch.clamp(y_true, 0, self.max_clip)
 
-        y_true = y_true.view(y_true.shape[0], -1)
-        y_true = torch.unsqueeze(y_true, 2)
+        y_true = y_true.view(y_true.shape[0], -1)  # This reshape into (batch_size, num_voxels)
+        y_true = torch.unsqueeze(y_true, 2)  # This reshape into (batch_size, num_voxels, 1)
         y_pred = y_pred.view(y_pred.shape[0], -1)
         y_pred = torch.unsqueeze(y_pred, 2)
 
@@ -620,3 +625,35 @@ class DisplacementRegularizer(torch.nn.Module):
         else:
             raise Exception('Not recognised local regulariser!')
         return energy
+
+def diff_mutual_information(x, y, channel_to_take=0):
+    """This implementation is based on the following repo:
+    https://github.com/winfried-ripken/deep-hist
+    For 4D: There is only one channel to take which is 0.
+    For 3D: channel to take is one of the RGB to take (0, 1, 2). """
+    # to save memory, we need to average channels. x is 160x192x224, every 5 slices, we average them. so x will be 32x192x224
+    # x shape (1,1,160,192,224)
+    # average every 5 slices
+    n_channels_avg = 5
+    output_channels = x.shape[2] // n_channels_avg
+    x = torch.mean(x.view(x.shape[0], x.shape[1], output_channels, n_channels_avg, x.shape[3], x.shape[4]), dim=3)
+    y = torch.mean(y.view(y.shape[0], y.shape[1], output_channels, n_channels_avg, y.shape[3], y.shape[4]), dim=3)
+    # x_patches = split_into_patches(x)
+    # y_patches = split_into_patches(y)
+
+
+
+    xy_joint_histogram, x_histogram, y_histogram = JointHistLayer()(x[:, channel_to_take], y[:, channel_to_take])
+
+    return MutualInformationLoss()(x_histogram, y_histogram, xy_joint_histogram)
+
+
+def split_into_patches(tensor, patch_size=20):
+    # Use the unfold function to extract patches
+    patches = tensor.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size).unfold(4, patch_size,
+                                                                                                patch_size)
+
+    # Reshape the output to get the patches into a single dimension
+    patches = patches.contiguous().view(tensor.size(0), tensor.size(1), -1, patch_size, patch_size, patch_size)
+
+    return patches
