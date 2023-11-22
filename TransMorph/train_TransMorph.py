@@ -39,12 +39,12 @@ def main():
     weights = [1, 0.02] # loss weights
     mi_loss = lambda x, y: losses.diff_mutual_information(x, y)
     mi_from_other_repo = MutualInformationFromOtherRepo(num_bins=256, sigma=0.1, normalize=True).cuda()
-    mi_loss = lambda x, y: 1 - mi_from_other_repo(x, y)
+    mi_loss = lambda x, y: 1.3 + 1 - mi_from_other_repo(x, y)
     L2_loss = nn.MSELoss()
     grad3d_loss = losses.Grad3d(penalty='l2')
     criterions = [mi_loss, grad3d_loss]
     penalty_lambda = 3
-    process_name = f'MI_from_other_repo_3_penalty_atlas2atlas_IXI_cuda{cuda_idx}'
+    process_name = f'per_channel_MI_from_other_repo_plus1.3__3_penalty_atlas2atlas_IXI_cuda{cuda_idx}'
     if not os.path.exists('experiments/'+process_name):
         os.makedirs('experiments/'+process_name)
     if not os.path.exists('logs/'+process_name):

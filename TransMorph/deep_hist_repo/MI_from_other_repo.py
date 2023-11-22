@@ -1,5 +1,5 @@
 import os
-import numpy as np 
+import numpy as np
 
 import torch
 import torch.nn as nn
@@ -23,12 +23,14 @@ class MutualInformationFromOtherRepo(nn.Module):
 		self.normalize = normalize
 		self.epsilon = 1e-10
 
-		self.bins = nn.Parameter(torch.linspace(0, 255, num_bins).float(), requires_grad=False)
+		# self.bins = nn.Parameter(torch.linspace(0, 255, num_bins).float(), requires_grad=False)
 
 
 	def marginalPdf(self, values):
-
-		residuals = values - self.bins.unsqueeze(0).unsqueeze(0)
+		# original one:
+		# residuals = values - self.bins.unsqueeze(0).unsqueeze(0)
+		# my fix for 3D
+		residuals = (values - self.bins).transpose(0, 2)
 		kernel_values = torch.exp(-0.5*(residuals / self.sigma).pow(2))
 		
 		pdf = torch.mean(kernel_values, dim=1)
@@ -55,6 +57,9 @@ class MutualInformationFromOtherRepo(nn.Module):
 			return: scalar
 		'''
 
+		#make sure input1 and input2 are in [0,1]
+		# input1 = (input1 - input1.min()) / (input1.max() - input1.min())
+		# input2 = (input2 - input2.min()) / (input2.max() - input2.min())
 		# Torch tensors for images between (0, 1)
 
 		input1 = input1*255
@@ -71,17 +76,17 @@ class MutualInformationFromOtherRepo(nn.Module):
 			input1 = input1[:, 0]
 			input2 = input2[:, 0]
 			B, C, H, W = input1.shape
-			x1 = input1.view(B, C * H * W, 1)
-			x2 = input2.view(B, C * H * W, 1)
+			x1 = input1.view(B, H * W, C)
+			x2 = input2.view(B, H * W, C)
 		else:
 			B, C, H, W = input1.shape
 			x1 = input1.view(B, H * W, C)
 			x2 = input2.view(B, H * W, C)
 		assert((input1.shape == input2.shape))
 
+		self.bins = torch.linspace(0, 255, self.num_bins, dtype=input1.dtype).to(input1.device)
+		self.bins = self.bins.view(self.num_bins, 1, 1).repeat(1, H * W, C)  # Reshape bins to (256, N, C)
 
-
-		
 		pdf_x1, kernel_values1 = self.marginalPdf(x1)
 		pdf_x2, kernel_values2 = self.marginalPdf(x2)
 		pdf_x1x2 = self.jointPdf(kernel_values1, kernel_values2)
@@ -96,7 +101,7 @@ class MutualInformationFromOtherRepo(nn.Module):
 			# GithubCopilot says: what it does is to normalize the mutual information by the average entropy of the two images
 			mutual_information = 2*mutual_information/(H_x1+H_x2)
 
-		return mutual_information
+		return mutual_information.mean()
 
 
 	def forward(self, input1, input2):
