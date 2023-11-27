@@ -28,13 +28,15 @@ class Logger(object):
         pass
 
 def main():
-    cuda_idx = "1"
+    cuda_idx = "0"
     os.environ["CUDA_VISIBLE_DEVICES"] = cuda_idx  # Choose GPU
     batch_size = 1
     num_workers = 4
     atlas_path = None  # when its none, we are training brain2brain (and not brain2atlas)
     # atlas_path = '/raid/data/users/adarc/registration/IXI/IXI_data/new_atlas_subject_6_from_test.pkl'
     train_dir = '/raid/data/users/adarc/registration/IXI/IXI_data/Train/'
+    # train_dir = r"D:\Datasets\Learning2Reg\L2R_2021_Task3_test/"
+    # val_dir = r"D:\Datasets\Learning2Reg\L2R_2021_Task3_test/"
     val_dir = '/raid/data/users/adarc/registration/IXI/IXI_data/Val/'
     weights = [1, 0.02] # loss weights
     mi_loss = lambda x, y: losses.diff_mutual_information(x, y)
@@ -44,7 +46,8 @@ def main():
     grad3d_loss = losses.Grad3d(penalty='l2')
     criterions = [mi_loss, grad3d_loss]
     penalty_lambda = 3
-    process_name = f'per_channel_MI_from_other_repo_plus1.3__3_penalty_atlas2atlas_IXI_cuda{cuda_idx}'
+    # process_name = f'DEBUG__delete_this'
+    process_name = f'50%faster_MI_from_other_repo_plus1.3__3_penalty_atlas2atlas_IXI_cuda{cuda_idx}'
     if not os.path.exists('experiments/'+process_name):
         os.makedirs('experiments/'+process_name)
     if not os.path.exists('logs/'+process_name):
