@@ -26,9 +26,9 @@ class JHUBrainDataset(Dataset):
             y, y_seg = pkload(path)
         else:
             # Brain2Brain
-            x, x_seg = pkload(path)
+            x, x_seg = pkload(path)  # np array should be shape (160, 192, 224)
             y, y_seg = pkload(self._get_random_path())
-        # norm in [0,1]
+
         x = (x - x.min()) / (x.max() - x.min())
         y = (y - y.min()) / (y.max() - y.min())
 

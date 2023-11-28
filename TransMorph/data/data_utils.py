@@ -2,6 +2,8 @@ import random
 import pickle
 import numpy as np
 import torch
+import nibabel as nib
+
 
 M = 2 ** 32 - 1
 
@@ -36,6 +38,10 @@ def sample(x, size):
 def pkload(fname):
     with open(fname, 'rb') as f:
         return pickle.load(f)
+
+def nibabel_loader(path):
+    img = nib.load(path)
+    return img.get_fdata()
 
 
 _shape = (240, 240, 155)

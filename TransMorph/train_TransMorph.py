@@ -28,26 +28,28 @@ class Logger(object):
         pass
 
 def main():
-    cuda_idx = "0"
+    cuda_idx = "1"
     os.environ["CUDA_VISIBLE_DEVICES"] = cuda_idx  # Choose GPU
     batch_size = 1
     num_workers = 4
     atlas_path = None  # when its none, we are training brain2brain (and not brain2atlas)
-    # atlas_path = '/raid/data/users/adarc/registration/IXI/IXI_data/new_atlas_subject_6_from_test.pkl'
-    train_dir = '/raid/data/users/adarc/registration/IXI/IXI_data/Train/'
-    # train_dir = r"D:\Datasets\Learning2Reg\L2R_2021_Task3_test/"
-    # val_dir = r"D:\Datasets\Learning2Reg\L2R_2021_Task3_test/"
-    val_dir = '/raid/data/users/adarc/registration/IXI/IXI_data/Val/'
+    # data_root = r"D:\Datasets\Learning2Reg\OASIS_2022\images_labels_Tr_pkls"
+    data_root = '/raid/data/users/adarc/registration/data/IXI/IXI_data'
+    data_root = '/raid/data/users/adarc/registration/data/OASIS/images_labels_Tr_pkls'
+    # atlas_path = os.path.join(data_root, 'new_atlas_subject_6_from_test.pkl')
+    train_dir = os.path.join(data_root, 'Train')
+    val_dir = os.path.join(data_root, 'Val')
+
     weights = [1, 0.02] # loss weights
     mi_loss = lambda x, y: losses.diff_mutual_information(x, y)
-    mi_from_other_repo = MutualInformationFromOtherRepo(num_bins=256, sigma=0.1, normalize=True).cuda()
-    mi_loss = lambda x, y: 1.3 + 1 - mi_from_other_repo(x, y)
+    # mi_from_other_repo = MutualInformationFromOtherRepo(num_bins=256, sigma=0.1, normalize=True).cuda()
+    # mi_loss = lambda x, y: 1.3 + 1 - mi_from_other_repo(x, y)
     L2_loss = nn.MSELoss()
     grad3d_loss = losses.Grad3d(penalty='l2')
     criterions = [mi_loss, grad3d_loss]
     penalty_lambda = 3
     # process_name = f'DEBUG__delete_this'
-    process_name = f'50%faster_MI_from_other_repo_plus1.3__3_penalty_atlas2atlas_IXI_cuda{cuda_idx}'
+    process_name = f'MI_{penalty_lambda}_penalty_atlas2atlas_2021OASIS_cuda{cuda_idx}'
     if not os.path.exists('experiments/'+process_name):
         os.makedirs('experiments/'+process_name)
     if not os.path.exists('logs/'+process_name):
@@ -56,7 +58,7 @@ def main():
     lr = 0.0001 # learning rate
 
     epoch_start = 0
-    max_epoch = 500 #max traning epoch
+    max_epoch = 50000 #max traning epoch
     # pretrained_model_path = '/raid/data/users/adarc/registration/forked-remote/experiments/bs1_onlydataset_change_TransMorph_mse_1_diffusion_0.02/dsc0.694.pth.tar'
     pretrained_model_path = None
 
@@ -99,8 +101,8 @@ def main():
         trans.Seg_norm(),  # rearrange segmentation label to 1 to 46
         trans.NumpyType((np.float32, np.int16, np.float32, np.int16)),
     ])
-    train_set = datasets.JHUBrainDataset(glob.glob(train_dir + '*.pkl'), transforms=train_composed, atlas_path=atlas_path)
-    val_set = datasets.JHUBrainDataset(glob.glob(val_dir + '*.pkl'), transforms=val_composed, atlas_path=atlas_path)
+    train_set = datasets.JHUBrainDataset(glob.glob(os.path.join(train_dir, '*.pkl')), transforms=train_composed, atlas_path=atlas_path)
+    val_set = datasets.JHUBrainDataset(glob.glob(os.path.join(val_dir, '*.pkl')), transforms=val_composed, atlas_path=atlas_path)
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
     val_loader = DataLoader(val_set, batch_size=1, shuffle=False, num_workers=num_workers, pin_memory=True, drop_last=True)
 
