@@ -28,14 +28,19 @@ class Logger(object):
         pass
 
 def main():
+    working_remotely = os.getcwd().split('/')[1] == 'raid'
     cuda_idx = "1"
     os.environ["CUDA_VISIBLE_DEVICES"] = cuda_idx  # Choose GPU
     batch_size = 1
     num_workers = 4
     atlas_path = None  # when its none, we are training brain2brain (and not brain2atlas)
-    # data_root = r"D:\Datasets\Learning2Reg\OASIS_2022\images_labels_Tr_pkls"
-    data_root = '/raid/data/users/adarc/registration/data/IXI/IXI_data'
-    data_root = '/raid/data/users/adarc/registration/data/OASIS/images_labels_Tr_pkls'
+    if working_remotely:
+        # IXI or OASIS
+        data_root = '/raid/data/users/adarc/registration/data/OASIS/images_labels_Tr_pkls'
+        # data_root = '/raid/data/users/adarc/registration/data/IXI/IXI_data'
+    else:
+        data_root = r"D:\Datasets\Learning2Reg\OASIS_2022\images_labels_Tr_pkls"
+
     # atlas_path = os.path.join(data_root, 'new_atlas_subject_6_from_test.pkl')
     train_dir = os.path.join(data_root, 'Train')
     val_dir = os.path.join(data_root, 'Val')
@@ -112,7 +117,7 @@ def main():
     best_dsc = 0
     writer = SummaryWriter(log_dir='logs/'+process_name)
     for epoch in range(epoch_start, max_epoch):
-        print(f'starting epoch {epoch}')
+        print(f'starting epoch {epoch} of {process_name=}')
         '''
         Training
         '''
