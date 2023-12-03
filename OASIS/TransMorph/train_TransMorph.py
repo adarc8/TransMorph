@@ -27,10 +27,14 @@ class Logger(object):
 
 def main():
     batch_size = 1
-    train_dir = 'D:/DATA/OASIS/All/'
-    val_dir = 'D:/DATA/OASIS/Test/'
-    weights = [1, 1, 1] # loss weights
-    save_dir = 'TransMorph_ncc_{}_dsc{}_diffusion_{}/'.format(weights[0], weights[1], weights[2])
+    train_dir = '/raid/data/users/adarc/registration/data/OASIS/images_labels_Tr_pkls/Train/'
+    val_dir = '/raid/data/users/adarc/registration/data/OASIS/images_labels_Tr_pkls/Val_coupled/'
+    weights = [1, 1, 1]  # loss weights
+    criterion_ncc = losses.NCC_vxm()
+    # criterion_ncc = lambda x, y: (losses.diff_mutual_information(x, y, n_channels_avg=5)).mean()
+    criterion_dsc = losses.DiceLoss()
+    criterion_reg = losses.Grad3d(penalty='l2')
+    save_dir = f'1NCC_1DSC_1penalty_OASIS_cuda=1'
     if not os.path.exists('experiments/'+save_dir):
         os.makedirs('experiments/'+save_dir)
     if not os.path.exists('logs/'+save_dir):
@@ -82,10 +86,9 @@ def main():
     val_loader = DataLoader(val_set, batch_size=1, shuffle=False, num_workers=4, pin_memory=True, drop_last=True)
 
     optimizer = optim.Adam(model.parameters(), lr=updated_lr, weight_decay=0, amsgrad=True)
-    criterion_ncc = losses.NCC_vxm()
-    criterion_dsc = losses.DiceLoss()
-    criterion_reg = losses.Grad3d(penalty='l2')
     best_dsc = 0
+    train_batch_writer = 0
+    val_batch_writer = 0
     writer = SummaryWriter(log_dir='logs/'+save_dir)
     for epoch in range(epoch_start, max_epoch):
         print('Training Starts')
@@ -115,10 +118,10 @@ def main():
                 def_seg = model.spatial_trans(x_seg_oh[:, i:i + 1, ...].float(), flow.float())
                 def_segs.append(def_seg)
             def_seg = torch.cat(def_segs, dim=1)
-            loss_ncc = criterion_ncc(output, y) * weights[0]
-            loss_dsc = criterion_dsc(def_seg, y_seg.long()) * weights[1]
-            loss_reg = criterion_reg(flow, y) * weights[2]
-            loss = loss_ncc + loss_dsc + loss_reg
+            loss_ncc = criterion_ncc(output, y)
+            loss_dsc = criterion_dsc(def_seg, y_seg.long())
+            loss_reg = criterion_reg(flow, y)
+            loss = loss_ncc * weights[0] + loss_reg * weights[2] + loss_dsc * weights[1]
             loss_all.update(loss.item(), y.numel())
             # compute gradient and do SGD step
             optimizer.zero_grad()
@@ -138,10 +141,11 @@ def main():
                 def_seg = model.spatial_trans(y_seg_oh[:, i:i + 1, ...].float(), flow.float())
                 def_segs.append(def_seg)
             def_seg = torch.cat(def_segs, dim=1)
-            loss_ncc = criterion_ncc(output, x) * weights[0]
-            loss_dsc = criterion_dsc(def_seg, x_seg.long()) * weights[1]
-            loss_reg = criterion_reg(flow, x) * weights[2]
-            loss = loss_ncc + loss_dsc + loss_reg
+            loss_ncc = criterion_ncc(output, x)
+            # with torch.no_grad():
+            loss_dsc = criterion_dsc(def_seg, x_seg.long())
+            loss_reg = criterion_reg(flow, x)
+            loss = loss_ncc * weights[0] + loss_reg * weights[2] + loss_dsc * weights[1]
             loss_all.update(loss.item(), x.numel())
             # compute gradient and do SGD step
             optimizer.zero_grad()
@@ -155,6 +159,10 @@ def main():
                                                                                                 loss_dsc.item(),
                                                                                                 loss_reg.item()))
 
+            writer.add_scalar('Loss/train_batch_loss_NCC', loss_ncc.item(), train_batch_writer)
+            writer.add_scalar('Loss/train_batch_loss_dsc', loss_dsc.item(), train_batch_writer)
+            writer.add_scalar('Loss/train_batch_loss_reg', loss_reg.item(), train_batch_writer)
+            train_batch_writer += 1
 
         writer.add_scalar('Loss/train', loss_all.avg, epoch)
         print('Epoch {} loss {:.4f}'.format(epoch, loss_all.avg))
@@ -178,13 +186,20 @@ def main():
                 dsc = utils.dice_val_VOI(def_out.long(), y_seg.long())
                 eval_dsc.update(dsc.item(), x.size(0))
                 print(eval_dsc.avg)
+                loss_ncc = criterion_ncc(output[0], y)
+                loss_dsc = criterion_dsc(def_out, y_seg.long())
+                loss_reg = criterion_reg(output[1], y)
+                writer.add_scalar('Loss/val_batch_loss_NCC', loss_ncc.item(), val_batch_writer)
+                writer.add_scalar('Loss/val_batch_loss_dsc', loss_dsc.item(), val_batch_writer)
+                writer.add_scalar('Loss/val_batch_loss_reg', loss_reg.item(), val_batch_writer)
+                val_batch_writer += 1
         best_dsc = max(eval_dsc.avg, best_dsc)
-        save_checkpoint({
-            'epoch': epoch + 1,
-            'state_dict': model.state_dict(),
-            'best_dsc': best_dsc,
-            'optimizer': optimizer.state_dict(),
-        }, save_dir='experiments/'+save_dir, filename='dsc{:.4f}.pth.tar'.format(eval_dsc.avg))
+        # save_checkpoint({
+        #     'epoch': epoch + 1,
+        #     'state_dict': model.state_dict(),
+        #     'best_dsc': best_dsc,
+        #     'optimizer': optimizer.state_dict(),
+        # }, save_dir='experiments/'+save_dir, filename='dsc{:.4f}.pth.tar'.format(eval_dsc.avg))
         writer.add_scalar('DSC/validate', eval_dsc.avg, epoch)
         plt.switch_backend('agg')
         pred_fig = comput_fig(def_out)
@@ -227,17 +242,24 @@ def mk_grid_img(grid_step, line_thickness=1, grid_sz=(160, 192, 224)):
     grid_img = torch.from_numpy(grid_img).cuda()
     return grid_img
 
+# def save_checkpoint(state, save_dir='models', filename='checkpoint.pth.tar', max_model_num=8):
+#     torch.save(state, save_dir+filename)
+#     model_lists = natsorted(glob.glob(save_dir + '*'))
+#     while len(model_lists) > max_model_num:
+#         os.remove(model_lists[0])
+#         model_lists = natsorted(glob.glob(save_dir + '*'))
+
 def save_checkpoint(state, save_dir='models', filename='checkpoint.pth.tar', max_model_num=8):
-    torch.save(state, save_dir+filename)
-    model_lists = natsorted(glob.glob(save_dir + '*'))
-    while len(model_lists) > max_model_num:
-        os.remove(model_lists[0])
-        model_lists = natsorted(glob.glob(save_dir + '*'))
+    torch.save(state, os.path.join(save_dir, filename))
+
+
 
 if __name__ == '__main__':
     '''
     GPU configuration
     '''
+    cuda_idx = "1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = cuda_idx  # Choose GPU
     GPU_iden = 0
     GPU_num = torch.cuda.device_count()
     print('Number of GPU: ' + str(GPU_num))

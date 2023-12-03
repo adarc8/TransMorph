@@ -626,34 +626,3 @@ class DisplacementRegularizer(torch.nn.Module):
             raise Exception('Not recognised local regulariser!')
         return energy
 
-def diff_mutual_information(x, y, channel_to_take=0):
-    """This implementation is based on the following repo:
-    https://github.com/winfried-ripken/deep-hist
-    For 4D: There is only one channel to take which is 0.
-    For 3D: channel to take is one of the RGB to take (0, 1, 2). """
-    # to save memory, we need to average channels. x is 160x192x224, every 5 slices, we average them. so x will be 32x192x224
-    # x shape (1,1,160,192,224)
-    # average every 5 slices
-    n_channels_avg = 5
-    output_channels = x.shape[2] // n_channels_avg
-    x = torch.mean(x.view(x.shape[0], x.shape[1], output_channels, n_channels_avg, x.shape[3], x.shape[4]), dim=3)
-    y = torch.mean(y.view(y.shape[0], y.shape[1], output_channels, n_channels_avg, y.shape[3], y.shape[4]), dim=3)
-    # x_patches = split_into_patches(x)
-    # y_patches = split_into_patches(y)
-
-
-
-    xy_joint_histogram, x_histogram, y_histogram = JointHistLayer()(x[:, channel_to_take], y[:, channel_to_take])
-
-    return MutualInformationLoss()(x_histogram, y_histogram, xy_joint_histogram)
-
-
-def split_into_patches(tensor, patch_size=20):
-    # Use the unfold function to extract patches
-    patches = tensor.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size).unfold(4, patch_size,
-                                                                                                patch_size)
-
-    # Reshape the output to get the patches into a single dimension
-    patches = patches.contiguous().view(tensor.size(0), tensor.size(1), -1, patch_size, patch_size, patch_size)
-
-    return patches

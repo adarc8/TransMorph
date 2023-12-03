@@ -157,7 +157,7 @@ class RandomFlip(Base):
 class RandSelect(Base):
     def __init__(self, prob=0.5, tf=None):
         self.prob = prob
-        self.ops  = tf if isinstance(tf, collections.Sequence) else (tf, )
+        self.ops  = tf if isinstance(tf, collections.abc.Sequence) else (tf, )
         self.buff = False
 
     def sample(self, *shape):
@@ -509,7 +509,7 @@ class Normalize(Base):
 
 class Compose(Base):
     def __init__(self, ops):
-        if not isinstance(ops, collections.Sequence):
+        if not isinstance(ops, collections.abc.Sequence):
             ops = ops,
         self.ops = ops
 
